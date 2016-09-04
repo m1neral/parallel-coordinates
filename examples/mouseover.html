@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <title>Mouse over and tooltip</title>
+        <meta content="text/html;charset=utf-8" http-equiv="Content-Type">
+        <meta content="utf-8" http-equiv="encoding">
+        <link rel="stylesheet" type="text/css" href="../d3.parcoords.css">
+        <link rel="stylesheet" type="text/css" href="style.css">
+        <script src="lib/d3.js"></script>
+        <script src="../d3.parcoords.js"></script>
+    </head>
+    <body>
+        <div id="example" class="parcoords" style="width:1000px;height:500px"></div>
+        <p>Demonstrates creating a basic parallel coordinates plot with possibility to highlight when mouse-over and render tooltip</p>
+        <script>
+            var chart, data, intersectionPoints;
+
+            d3.csv('data/cars.csv', function(d) {
+                data = d.slice(0, 30);
+
+                chart = d3.parcoords()('#example')
+                    .margin({ top: 30, left: 200, bottom: 30, right: 0 })
+                    .data(data)
+                    .alpha(0.4)
+                    .mode('queue')
+                    .rate(5)
+                    .render()
+                    .interactive()
+                    .brushMode('1D-axes')
+                    .on('brush', function() { updateIntersectionPoints(); });
+
+                updateIntersectionPoints();
+                addHighlightSettings();
+            });
+
+            function computeCentroids(data) {
+                var margins = chart.margin();
+                return chart.compute_real_centroids(data).map(function(d) { return [d[0] + margins.left, d[1] + margins.top]; });
+            }
+
+            function updateIntersectionPoints() {
+                var brushedData = chart.brushed().length ? chart.brushed() : data;
+                intersectionPoints = brushedData.map(function(d) { return computeCentroids(d) });
+            }
+
+            function addHighlightSettings() {
+                var svg = d3.select('#example svg');
+                var svgElement = svg[0][0];
+
+                svg.on('mousemove', function() {
+                    highlightLines(d3.mouse(svgElement));
+                })
+                .on('mouseout', function() {
+                    chart.unhighlight();
+                    cleanTooltip();
+                });
+            }
+
+            function highlightLines(mouseCoordinates) {
+                var highlightedLines = getLinesForHighlight(mouseCoordinates);
+
+                if (highlightedLines && highlightedLines[0].length) {
+                    var currentData = highlightedLines[0];
+                    var currentIntersectionPoints = highlightedLines[1];
+
+                    chart.highlight(currentData);
+                    cleanTooltip();
+                    addTooltip(currentData, currentIntersectionPoints);
+                }
+            }
+
+
+            function getLinesForHighlight(mouseCoordinates) {
+                var rightAxisNumber = getNearAxis(mouseCoordinates);
+
+                if (intersectionPoints.length && rightAxisNumber) {
+                    var leftAxisNumber = rightAxisNumber - 1;
+
+                    var brushedData = chart.brushed().length ? chart.brushed() : data;
+
+                    var currentData = [];
+                    var currentIntersectionPoints = [];
+
+                    intersectionPoints.forEach(function(d, i) {
+                        if (isMouseOnLine(d[leftAxisNumber], d[rightAxisNumber], mouseCoordinates)) {
+                            currentData.push(brushedData[i]);
+                            currentIntersectionPoints.push(intersectionPoints[i]);
+                        }
+                    });
+
+                    return [currentData, currentIntersectionPoints];
+                }
+            }
+
+            function isMouseOnLine(startIntersectionPoint, endIntersectionPoint, mouseCoordinates) {
+                var accuracy = 2;
+
+                var x0 = mouseCoordinates[0];
+                var y0 = mouseCoordinates[1];
+                var x1 = startIntersectionPoint[0];
+                var y1 = startIntersectionPoint[1];
+                var x2 = endIntersectionPoint[0];
+                var y2 = endIntersectionPoint[1];
+
+                var dX = x2 - x1;
+                var dY = y2 - y1;
+
+                var delta = Math.abs(dY * x0 - dX * y0 - x1 * y2 + x2 * y1) / Math.sqrt(Math.pow(dX, 2) + Math.pow(dY, 2));
+
+                return delta <= accuracy;
+            }
+
+            function getNearAxis(mouseCoordinates) {
+                var x = mouseCoordinates[0];
+
+                var intersectionPointsSample = intersectionPoints[0];
+                var leftMostXPoint = intersectionPointsSample[0][0];
+                var rightMostXPoint = intersectionPointsSample[intersectionPointsSample.length - 1][0];
+
+                if (leftMostXPoint <= x && x <= rightMostXPoint) {
+                    for (var axisNumber = 0; axisNumber < intersectionPointsSample.length; axisNumber++) {
+                        if (intersectionPointsSample[axisNumber][0] > x) { return axisNumber; }
+                    }
+                }
+            }
+
+            function addTooltip(currentData, currentIntersectionPoints) {
+                var tooltipData = getTooltipData(currentData, currentIntersectionPoints);
+
+                var fontSize = 14;
+                var padding = 2;
+                var rectHeight = fontSize + 2 * padding;
+
+                chart.svg.selectAll('rect .tooltip')
+                    .data(tooltipData).enter()
+                    .append('rect')
+                    .attr('x', function(d) { return d[0] - d[2].length * 5; })
+                    .attr('y', function(d) { return d[1] - rectHeight + 2 * padding; })
+                    .attr('rx', '2')
+                    .attr('ry', '2')
+                    .attr('class', 'tooltip')
+                    .attr('fill', 'grey')
+                    .attr('opacity', 0.9)
+                    .attr('width', function(d) { return d[2].length * 10; })
+                    .attr('height', rectHeight);
+
+                chart.svg.selectAll('text .tooltip')
+                    .data(tooltipData).enter()
+                    .append('text')
+                    .attr('x', function(d) { return d[0]; })
+                    .attr('y', function(d) { return d[1]; })
+                    .attr('class', 'tooltip')
+                    .attr('fill', 'white')
+                    .attr('text-anchor', 'middle')
+                    .attr('font-size', fontSize)
+                    .text(function(d) { return d[2]; });
+            }
+
+            function getTooltipData(currentData, currentIntersectionPoints) {
+                var margins = this.chart.margin();
+                var tooltipData = [];
+
+                for (var i = 0; i < currentData.length; i++) {
+                    for (var j = 0; j < currentIntersectionPoints[i].length; j++) {
+                        var text = d3.values(currentData[i])[j];
+                        var x = currentIntersectionPoints[i][j][0];
+                        var y = currentIntersectionPoints[i][j][1];
+
+                        tooltipData.push([x - margins.left, y - margins.top, text]);
+                    }
+                }
+
+                return tooltipData;
+            }
+
+            function cleanTooltip() { chart.svg.selectAll('.tooltip').remove(); }
+        </script>
+    </body>
+</html>
